@@ -1,0 +1,11 @@
+*.pyc
+__pycache__/
+.venv/
+build/
+builddir/
+stage/
+fprintd-stage/
+local-pkgconfig/
+*.log
+*.status
+state/
