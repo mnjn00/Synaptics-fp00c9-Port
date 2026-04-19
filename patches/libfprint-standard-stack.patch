@@ -1,0 +1,415 @@
+diff --git a/libfprint/libfprint/data/autosuspend.hwdb b/libfprint/libfprint/data/autosuspend.hwdb
+index 8e0e6ea..fc4c282 100644
+--- a/libfprint/libfprint/data/autosuspend.hwdb
++++ b/libfprint/libfprint/data/autosuspend.hwdb
+@@ -245,6 +245,13 @@ usb:v06CBp0106*
+  ID_AUTOSUSPEND=1
+  ID_PERSIST=0
+ 
++# Supported by libfprint driver synatlsmoc
++usb:v06CBp00C9*
++usb:v06CBp00FF*
++usb:v06CBp016C*
++ ID_AUTOSUSPEND=1
++ ID_PERSIST=0
++
+ # Supported by libfprint driver upeksonly
+ usb:v147Ep2016*
+ usb:v147Ep1000*
+@@ -340,7 +347,6 @@ usb:v06CBp00BB*
+ usb:v06CBp00BE*
+ usb:v06CBp00C4*
+ usb:v06CBp00CB*
+-usb:v06CBp00C9*
+ usb:v06CBp00D8*
+ usb:v06CBp00DA*
+ usb:v06CBp00DC*
+diff --git a/libfprint/libfprint/examples/enroll.c b/libfprint/libfprint/examples/enroll.c
+index 10dfa5d..4bc3da3 100644
+--- a/libfprint/libfprint/examples/enroll.c
++++ b/libfprint/libfprint/examples/enroll.c
+@@ -175,6 +175,9 @@ on_device_opened (FpDevice *dev, GAsyncResult *res, void *user_data)
+       return;
+     }
+ 
++  if (persistent_data_save (dev) < 0)
++    g_warning ("Failed to save persistent pairing data after open");
++
+   printf ("Opened device.\n");
+ 
+   if (fp_device_has_feature (dev, FP_DEVICE_FEATURE_UPDATE_PRINT))
+@@ -251,6 +254,8 @@ main (void)
+       return EXIT_FAILURE;
+     }
+ 
++  persistent_data_load (dev);
++
+   enroll_data = g_new0 (EnrollData, 1);
+   enroll_data->finger = finger;
+   enroll_data->ret_value = EXIT_FAILURE;
+diff --git a/libfprint/libfprint/examples/identify.c b/libfprint/libfprint/examples/identify.c
+index dc6a5d5..157e777 100644
+--- a/libfprint/libfprint/examples/identify.c
++++ b/libfprint/libfprint/examples/identify.c
+@@ -253,6 +253,9 @@ on_device_opened (FpDevice *dev, GAsyncResult *res, void *user_data)
+       return;
+     }
+ 
++  if (persistent_data_save (dev) < 0)
++    g_warning ("Failed to save persistent pairing data after open");
++
+   g_print ("Opened device. ");
+ 
+   start_identification (dev, identify_data);
+@@ -295,6 +298,8 @@ main (void)
+       return EXIT_FAILURE;
+     }
+ 
++  persistent_data_load (dev);
++
+   if (!fp_device_has_feature (dev, FP_DEVICE_FEATURE_IDENTIFY))
+     {
+       g_warning ("Device %s does not support identification.",
+diff --git a/libfprint/libfprint/examples/manage-prints.c b/libfprint/libfprint/examples/manage-prints.c
+index 88200a3..8cadc7b 100644
+--- a/libfprint/libfprint/examples/manage-prints.c
++++ b/libfprint/libfprint/examples/manage-prints.c
+@@ -23,6 +23,7 @@
+ #include <stdio.h>
+ 
+ #include <libfprint/fprint.h>
++#include "storage.h"
+ #include "utilities.h"
+ 
+ typedef struct _ListData
+@@ -231,6 +232,9 @@ on_device_opened (FpDevice     *dev,
+       return;
+     }
+ 
++  if (persistent_data_save (dev) < 0)
++    g_warning ("Failed to save persistent pairing data after open");
++
+   if (!fp_device_has_feature (dev, FP_DEVICE_FEATURE_STORAGE))
+     {
+       g_warning ("Device %s doesn't support storage", fp_device_get_name (dev));
+@@ -271,6 +275,8 @@ main (void)
+       return EXIT_FAILURE;
+     }
+ 
++  persistent_data_load (dev);
++
+   list_data = g_new0 (ListData, 1);
+   list_data->ret_value = EXIT_FAILURE;
+   list_data->loop = g_main_loop_new (NULL, FALSE);
+diff --git a/libfprint/libfprint/examples/storage.c b/libfprint/libfprint/examples/storage.c
+index b84c72d..5fef34f 100644
+--- a/libfprint/libfprint/examples/storage.c
++++ b/libfprint/libfprint/examples/storage.c
+@@ -30,7 +30,16 @@
+ #include <stdlib.h>
+ #include <unistd.h>
+ 
+-#define STORAGE_FILE "test-storage.variant"
++static const char *
++get_storage_file (void)
++{
++  const char *storage_file = g_getenv ("FP_EXAMPLE_STORAGE_FILE");
++
++  if (storage_file && *storage_file)
++    return storage_file;
++
++  return "test-storage.variant";
++}
+ 
+ static char *
+ get_print_data_descriptor (FpPrint *print, FpDevice *dev, FpFinger finger)
+@@ -63,7 +72,7 @@ load_data (void)
+   gchar *contents = NULL;
+   gsize length = 0;
+ 
+-  if (!g_file_get_contents (STORAGE_FILE, &contents, &length, NULL))
++  if (!g_file_get_contents (get_storage_file (), &contents, &length, NULL))
+     {
+       g_warning ("Error loading storage, assuming it is empty");
+       return g_variant_dict_new (NULL);
+@@ -90,7 +99,7 @@ save_data (GVariant *data)
+   length = g_variant_get_size (data);
+   contents = (gchar *) g_variant_get_data (data);
+ 
+-  if (!g_file_set_contents (STORAGE_FILE, contents, length, NULL))
++  if (!g_file_set_contents (get_storage_file (), contents, length, NULL))
+     {
+       g_warning ("Error saving storage,!");
+       return -1;
+@@ -145,6 +154,50 @@ print_data_save (FpPrint *print, FpFinger finger, gboolean update_fingerprint)
+   return res;
+ }
+ 
++static char *
++get_persistent_data_descriptor (FpDevice *dev)
++{
++  return g_strdup_printf ("%s/%s/persistent-data",
++                          fp_device_get_driver (dev),
++                          fp_device_get_device_id (dev));
++}
++
++int
++persistent_data_save (FpDevice *dev)
++{
++  g_autoptr (GVariantDict) dict = NULL;
++  g_autoptr (GVariant) persistent_data = NULL;
++  g_autofree gchar *descr = NULL;
++
++  g_object_get (dev, "fpi-persistent-data", &persistent_data, NULL);
++  if (!persistent_data)
++    return 0;
++
++  dict = load_data ();
++  descr = get_persistent_data_descriptor (dev);
++  g_variant_dict_insert_value (dict, descr, persistent_data);
++
++  return save_data (g_variant_dict_end (dict));
++}
++
++int
++persistent_data_load (FpDevice *dev)
++{
++  g_autoptr (GVariantDict) dict = NULL;
++  g_autoptr (GVariant) persistent_data = NULL;
++  g_autofree gchar *descr = NULL;
++
++  dict = load_data ();
++  descr = get_persistent_data_descriptor (dev);
++  persistent_data = g_variant_dict_lookup_value (dict, descr, NULL);
++
++  if (!persistent_data)
++    return -ENOENT;
++
++  g_object_set (dev, "fpi-persistent-data", persistent_data, NULL);
++  return 0;
++}
++
+ FpPrint *
+ print_data_load (FpDevice *dev, FpFinger finger)
+ {
+diff --git a/libfprint/libfprint/examples/storage.h b/libfprint/libfprint/examples/storage.h
+index 0922b90..3f9d699 100644
+--- a/libfprint/libfprint/examples/storage.h
++++ b/libfprint/libfprint/examples/storage.h
+@@ -23,6 +23,8 @@
+ int print_data_save (FpPrint *print,
+                      FpFinger finger,
+                      gboolean update_fingerprint);
++int persistent_data_save (FpDevice *dev);
++int persistent_data_load (FpDevice *dev);
+ FpPrint * print_data_load (FpDevice *dev,
+                            FpFinger  finger);
+ GPtrArray * gallery_data_load (FpDevice *dev);
+diff --git a/libfprint/libfprint/examples/verify.c b/libfprint/libfprint/examples/verify.c
+index 6892ef0..97b69a5 100644
+--- a/libfprint/libfprint/examples/verify.c
++++ b/libfprint/libfprint/examples/verify.c
+@@ -301,6 +301,9 @@ on_device_opened (FpDevice *dev, GAsyncResult *res, void *user_data)
+       return;
+     }
+ 
++  if (persistent_data_save (dev) < 0)
++    g_warning ("Failed to save persistent pairing data after open");
++
+   g_print ("Opened device. ");
+ 
+   start_verification (dev, verify_data);
+@@ -343,6 +346,8 @@ main (void)
+       return EXIT_FAILURE;
+     }
+ 
++  persistent_data_load (dev);
++
+   verify_data = g_new0 (VerifyData, 1);
+   verify_data->ret_value = EXIT_FAILURE;
+   verify_data->loop = g_main_loop_new (NULL, FALSE);
+diff --git a/libfprint/libfprint/libfprint/drivers/synatlsmoc/synatlsmoc.c b/libfprint/libfprint/libfprint/drivers/synatlsmoc/synatlsmoc.c
+index acaf2ae..9e1cabb 100644
+--- a/libfprint/libfprint/libfprint/drivers/synatlsmoc/synatlsmoc.c
++++ b/libfprint/libfprint/libfprint/drivers/synatlsmoc/synatlsmoc.c
+@@ -102,8 +102,9 @@ G_DEFINE_TYPE (FpiDeviceSynaTlsMoc, fpi_device_synatlsmoc, FP_TYPE_DEVICE);
+ 
+ // clang-format off
+ static const FpIdEntry id_table[] = {
++    /* 06cb:00c9 validated locally against the experimental pydrv flow */
++    { .vid = SYNAPTICS_VENDOR_ID, .pid = 0x00C9, },
+     /* the sensors commented out are untested, but should be suported */
+-    // { .vid = SYNAPTICS_VENDOR_ID,  .pid = 0x00C9, },
+     // { .vid = SYNAPTICS_VENDOR_ID,  .pid = 0x00D1, },
+     // { .vid = SYNAPTICS_VENDOR_ID,  .pid = 0x00E7, },
+     { .vid = SYNAPTICS_VENDOR_ID, .pid = 0x00FF, },
+@@ -645,6 +646,10 @@ synatlsmoc_set_print_data (FpPrint *print, Db2Id template_id, FpUserId fp_user_i
+   g_object_set (print, "fpi-data", fpi_data, NULL);
+ }
+ 
++static gboolean
++find_print_by_template_id (GPtrArray *prints, const guint8 *template_id, guint *index_out);
++static void synatlsmoc_wait_for_events (FpiDeviceSynaTlsMoc *self);
++
+ /* here are communication functions sorted by value of cmd_id */
+ /* VCSFW_CMD_GET_VERSION =================================================== */
+ 
+@@ -1746,7 +1751,15 @@ recv_identify_match (FpDevice *device, guint8 *buffer_in, gsize length_in, GErro
+         fpi_device_identify_report (device, g_ptr_array_index (prints, index),
+                                     print, NULL);
+       else
+-        fpi_device_identify_report (device, NULL, print, NULL);
++        {
++          found = find_print_by_template_id (prints, template_id, &index);
++
++          if (found)
++            fpi_device_identify_report (device, g_ptr_array_index (prints, index),
++                                        print, NULL);
++          else
++            fpi_device_identify_report (device, NULL, print, NULL);
++        }
+     }
+   else
+     {
+@@ -1797,7 +1810,7 @@ send_identify_match (FpiDeviceSynaTlsMoc *self,
+     {
+       written &=
+           fpi_byte_writer_put_data (&writer, *template_ids_to_match,
+-                                    template_id_cnt * template_id_array_size);
++                                    template_id_array_size);
+     }
+   else if (data_2 != NULL)
+     {
+@@ -2189,6 +2202,18 @@ recv_db2_get_payload_list (FpDevice *device, guint8 *buffer_in, gsize length_in,
+           bin2hex ((guint8 *) data->current_template_id, DB2_ID_SIZE);
+       fp_dbg ("No payload data for an enrollment with tuid: %s", tuid_str);
+ 
++      /* Some Tudor MiS sensors seem to keep template objects without separate
++       * payload objects. Expose a minimal device-stored print anyway so the
++       * standard stack can still identify/verify against the template. */
++      FpPrint *print = fp_print_new (device);
++      FpUserId user_id = { 0 };
++      g_snprintf ((gchar *) user_id, sizeof (FpUserId), "template-%s", tuid_str);
++      synatlsmoc_set_print_data (print, *data->current_template_id, user_id,
++                                 FP_FINGER_UNKNOWN);
++      g_ptr_array_add (data->list_result, g_object_ref_sink (print));
++      fp_dbg ("Added fallback print for template-only enrollment, result count now %u",
++              data->list_result->len);
++
+       if (data->list_template_id->len > 0)
+         fpi_ssm_jump_to_state (self->task_ssm, LIST_DB2_GET_PAYLOAD_LIST);
+       else
+@@ -2960,6 +2985,18 @@ synatlsmoc_event_interrupt_cb (FpiUsbTransfer *transfer,
+   fp_dbg ("Event sequence numbers: host=%d, sensor=%d", self->event_seq_num,
+           sensor_seq_num);
+ 
++  /* The interrupt endpoint only exposes the low 5 bits of the event sequence
++   * number. Ignore stale interrupts and keep waiting until the sensor reports
++   * a newer sequence number, matching the behavior of the working Python
++   * driver. Without this we can repeatedly re-read the same event stream and
++   * never observe the later FRAME_READY transition. */
++  if (sensor_seq_num == (self->event_seq_num & 0x1F))
++    {
++      fp_dbg ("Interrupt did not announce a newer event sequence; waiting again");
++      synatlsmoc_wait_for_events (self);
++      return;
++    }
++
+   send_event_read (self);
+ }
+ 
+@@ -3716,6 +3753,30 @@ error:
+   return ret;
+ }
+ 
++static gboolean
++find_print_by_template_id (GPtrArray *prints, const guint8 *template_id, guint *index_out)
++{
++  guint i;
++
++  for (i = 0; i < prints->len; i++)
++    {
++      g_autoptr (GError) error = NULL;
++      Db2Id candidate;
++
++      if (!get_template_id_from_fp_print (g_ptr_array_index (prints, i), candidate, &error))
++        continue;
++
++      if (memcmp (candidate, template_id, sizeof (Db2Id)) == 0)
++        {
++          if (index_out)
++            *index_out = i;
++          return TRUE;
++        }
++    }
++
++  return FALSE;
++}
++
+ static void
+ synatlsmoc_delete_run_state (FpiSsm *ssm, FpDevice *dev)
+ {
+@@ -3918,7 +3979,37 @@ synatlsmoc_identify_verify_run_state (FpiSsm *ssm, FpDevice *device)
+     case IDENTIFY_VERIFY_IDENTIFY_MATCH:
+       if (fpi_device_get_current_action (device) == FPI_DEVICE_ACTION_IDENTIFY)
+         {
+-          send_identify_match (self, NULL, 0);
++          GPtrArray *prints = NULL;
++          guint i;
++          guint template_id_cnt = 0;
++          g_autofree Db2Id *template_ids = NULL;
++
++          fpi_device_get_identify_data (device, &prints);
++
++          if (prints)
++            {
++              template_ids = g_new0 (Db2Id, prints->len);
++
++              for (i = 0; i < prints->len; i++)
++                {
++                  GError *error = NULL;
++
++                  if (!get_template_id_from_fp_print (g_ptr_array_index (prints, i),
++                                                      template_ids[template_id_cnt],
++                                                      &error))
++                    {
++                      g_clear_error (&error);
++                      continue;
++                    }
++
++                  template_id_cnt += 1;
++                }
++            }
++
++          if (template_id_cnt > 0)
++            send_identify_match (self, template_ids, template_id_cnt);
++          else
++            send_identify_match (self, NULL, 0);
+         }
+       else
+         {
+diff --git a/libfprint/libfprint/libfprint/drivers/synatlsmoc/utils.c b/libfprint/libfprint/libfprint/drivers/synatlsmoc/utils.c
+index 5ad25ec..6f0b480 100644
+--- a/libfprint/libfprint/libfprint/drivers/synatlsmoc/utils.c
++++ b/libfprint/libfprint/libfprint/drivers/synatlsmoc/utils.c
+@@ -302,7 +302,7 @@ event_type_to_str (guint8 event_type)
+       ret = "FINGER_DOWN";
+       break;
+     case 2:
+-      ret = "FINGER_DOWN";
++      ret = "FINGER_UP";
+       break;
+     case 24:
+       ret = "FRAME_READY";
+diff --git a/libfprint/libfprint/libfprint/fprint-list-udev-hwdb.c b/libfprint/libfprint/libfprint/fprint-list-udev-hwdb.c
+index 4d056ae..0d034f6 100644
+--- a/libfprint/libfprint/libfprint/fprint-list-udev-hwdb.c
++++ b/libfprint/libfprint/libfprint/fprint-list-udev-hwdb.c
+@@ -59,7 +59,6 @@ static const FpIdEntry allowlist_id_table[] = {
+   { .vid = 0x06cb, .pid = 0x00be },
+   { .vid = 0x06cb, .pid = 0x00c4 },
+   { .vid = 0x06cb, .pid = 0x00cb },
+-  { .vid = 0x06cb, .pid = 0x00c9 },
+   { .vid = 0x06cb, .pid = 0x00d8 },
+   { .vid = 0x06cb, .pid = 0x00da },
+   { .vid = 0x06cb, .pid = 0x00dc },
