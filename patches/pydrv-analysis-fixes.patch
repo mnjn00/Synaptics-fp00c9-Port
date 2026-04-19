@@ -1,0 +1,59 @@
+diff --git a/pydrv/tudor/driver/drvcmd/capture.py b/pydrv/tudor/driver/drvcmd/capture.py
+index ddf3958..ac7a6ab 100644
+--- a/pydrv/tudor/driver/drvcmd/capture.py
++++ b/pydrv/tudor/driver/drvcmd/capture.py
+@@ -66,4 +66,4 @@ class CmdIdentify(Command):
+             [tudor.sensor.SensorEventType.EV_FINGER_UP]
+         )
+ 
+-        ctx.sensor.auth()
++        ctx.sensor.auth([], user_id=None, sub_id=None)
+diff --git a/pydrv/tudor/sensor/event.py b/pydrv/tudor/sensor/event.py
+index 8593513..586b9b7 100644
+--- a/pydrv/tudor/sensor/event.py
++++ b/pydrv/tudor/sensor/event.py
+@@ -88,7 +88,9 @@ class SensorEventHandler:
+                     "    event sequence numbers: host=%d sensor=%d"
+                     % (self.event_seq_num & 0x1F, sensor_seq_num),
+                 )
+-                if sensor_seq_num != self.event_seq_num:
++                # Sensor interrupt packets expose only the low 5 bits of the
++                # event sequence number; compare like-with-like.
++                if sensor_seq_num != (self.event_seq_num & 0x1F):
+                     break
+ 
+         # Read sensor events
+diff --git a/pydrv/tudor/sensor/iota.py b/pydrv/tudor/sensor/iota.py
+index 05a4401..986b76b 100644
+--- a/pydrv/tudor/sensor/iota.py
++++ b/pydrv/tudor/sensor/iota.py
+@@ -120,8 +120,13 @@ class WbfParamIOTA(PackedIOTA):
+     def __init__(self, iota_id: int, data: bytes):
+         super().__init__(iota_id, data)
+ 
+-        # FIXME: different than original
+-        ver, self.param = struct.unpack("<xxxBIxxxxxxxx", self.payload)
++        # Some sensors expose an 8-byte payload here, others 16 bytes.
++        if len(self.payload) == 8:
++            ver, self.param = struct.unpack("<xxxBI", self.payload)
++        elif len(self.payload) == 16:
++            ver, self.param = struct.unpack("<xxxBIxxxxxxxx", self.payload)
++        else:
++            raise ValueError(f"Unexpected WBF IOTA payload length: {len(self.payload)} bytes: {self.payload.hex()}")
+         assert ver == 1
+ 
+     @staticmethod
+diff --git a/pydrv/tudor/sensor/sensor.py b/pydrv/tudor/sensor/sensor.py
+index 65939b6..1a08bc9 100644
+--- a/pydrv/tudor/sensor/sensor.py
++++ b/pydrv/tudor/sensor/sensor.py
+@@ -648,8 +648,7 @@ class Sensor:
+ 
+         nonce_buffer = resp[6:]
+         logging.info(
+-            tudor.LOG_INFO,
+-            f"<- received nonce buffer with size: {nonce_buffer_size}, data: {nonce_buffer}",
++            f"<- received nonce buffer with size: {nonce_buffer_size}, data: {nonce_buffer}"
+         )
+         assert len(nonce_buffer) == nonce_buffer_size
+         return nonce_buffer
